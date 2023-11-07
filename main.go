@@ -92,17 +92,17 @@ func handleConnection(conn net.Conn, upstream string) {
 		return
 	}
 
-	// Check query ID
-	if query.Id == 0 {
-		log.Printf("Invalid query ID")
-		return
-	}
+	// // Check query ID
+	// if query.Id == 0 {
+	// 	log.Printf("Invalid query ID: %v", query.Id)
+	// 	return
+	// }
 
-	// Check question count
-	if len(query.Question) != 1 {
-		log.Printf("Invalid question count")
-		return
-	}
+	// // Check question count
+	// if len(query.Question) != 1 {
+	// 	log.Printf("Invalid question count")
+	// 	return
+	// }
 
 	// Get question
 	question := query.Question[0]
@@ -150,7 +150,7 @@ func handleConnection(conn net.Conn, upstream string) {
 			&dns.EDNS0_SUBNET{
 				Code:          dns.EDNS0SUBNET,
 				Family:        1, // IP4
-				SourceNetmask: 24,
+				SourceNetmask: 32,
 				Address:       conn.RemoteAddr().(*net.TCPAddr).IP,
 			},
 			// Commented out to avoid Packet Overflow
