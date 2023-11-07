@@ -19,11 +19,12 @@ import (
 )
 
 type Config struct {
-	Upstream string `yaml:"upstream"`
-	Cert     string `yaml:"cert"`
-	Key      string `yaml:"key"`
-	Domain   string `yaml:"domain"`
-	Port     int    `yaml:"port"`
+	Upstream     string `yaml:"upstream"`
+	UpstreamPort int    `yaml:"upstream_port"`
+	Cert         string `yaml:"cert"`
+	Key          string `yaml:"key"`
+	Domain       string `yaml:"domain"`
+	Port         int    `yaml:"port"`
 }
 
 func main() {
@@ -110,9 +111,13 @@ func handleConnection(conn net.Conn, upstream string) {
 	var client *dns.Client
 	if strings.HasPrefix(upstream, "tls://") {
 		// DNS over TLS
-		config := &tls.Config{ServerName: question.Name}
-		dialer := &net.Dialer{Timeout: 10 * time.Second}
-		conn, err := tls.DialWithDialer(dialer, "tcp", upstream[6:], config)
+		config := &tls.Config{ServerName: strings.Split(upstream[6:], ":")[0]}
+		dialer := &net.Dialer{Timeout: 3 * time.Second}
+		dnsConfig, err := readConfig("config.yml")
+		if err != nil {
+			log.Fatalf("Failed to read config file: %v", err)
+		}
+		conn, err := tls.DialWithDialer(dialer, "tcp", upstream[6:]+":"+fmt.Sprintf("%d", dnsConfig.UpstreamPort), config)
 		if err != nil {
 			log.Printf("Failed to connect to upstream server: %v", err)
 			return
@@ -124,7 +129,7 @@ func handleConnection(conn net.Conn, upstream string) {
 		client = &dns.Client{Net: "tcp"}
 	} else {
 		// UDP DNS
-		client = &dns.Client{Net: "udp"}
+		client = &dns.Client{}
 	}
 
 	config, err := readConfig("config.yml")
@@ -132,10 +137,11 @@ func handleConnection(conn net.Conn, upstream string) {
 		log.Fatalf("Failed to read config file: %v", err)
 
 	}
-	key, err := os.ReadFile(config.Key)
-	if err != nil {
-		log.Fatalf("Failed to read key file: %v", err)
-	}
+	// Only used in EDNS0_COOKIE
+	// key, err := os.ReadFile(config.Key)
+	// if err != nil {
+	// 	log.Fatalf("Failed to read key file: %v", err)
+	// }
 
 	// Set EDNS0 options
 	opt := &dns.OPT{
@@ -147,16 +153,17 @@ func handleConnection(conn net.Conn, upstream string) {
 				SourceNetmask: 24,
 				Address:       conn.RemoteAddr().(*net.TCPAddr).IP,
 			},
-			&dns.EDNS0_COOKIE{
-				Code: dns.EDNS0COOKIE,
-				// Generate Cookie
-				Cookie: generateDNSCookie(conn.RemoteAddr().(*net.TCPAddr).IP, key),
-			},
+			// Commented out to avoid Packet Overflow
+			// &dns.EDNS0_COOKIE{
+			// 	Code: dns.EDNS0COOKIE,
+			// 	// Generate Cookie
+			// 	Cookie: generateDNSCookie(conn.RemoteAddr().(*net.TCPAddr).IP, key),
+			// },
 		},
 	}
 
-	// Set DNSSEC OK bit
-	if question.Qclass == dns.ClassINET {
+	// Set DNSSEC
+	if question.Qtype == dns.TypeDNSKEY || question.Qtype == dns.TypeDS {
 		opt.SetDo()
 	}
 
@@ -171,11 +178,18 @@ func handleConnection(conn net.Conn, upstream string) {
 	}
 
 	// Send query
-	response, _, err := client.Exchange(msg, upstream)
+	upstreamAddr := upstream
+	if strings.Contains(upstreamAddr, ":") {
+		upstreamAddr = upstream[6:]
+	}
+	response, _, err := client.Exchange(msg, upstreamAddr+":"+fmt.Sprintf("%d", config.UpstreamPort))
 	if err != nil {
 		log.Printf("Failed to send query: %v", err)
 		return
 	}
+
+	// Output request ip, query address, and query result
+	log.Printf("%s %s %s", conn.RemoteAddr().(*net.TCPAddr).IP, question.Name, response.Answer)
 
 	// Write response
 	err = writeDNSMessage(conn, response)
